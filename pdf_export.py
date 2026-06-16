@@ -284,6 +284,6 @@ def generate_pdf(rows, summary="", output_path="timetable.pdf"):
 
 
 
-rows, summary = load_timetable("timetable.json")
-generate_pdf(rows, summary, output_path="timetable.pdf")
-send_daily_nudge(rows, recipient_email=os.getenv("RECEIVER_EMAIL"))
+# rows, summary = load_timetable("timetable.json")
+# generate_pdf(rows, summary, output_path="timetable.pdf")
+# send_daily_nudge(rows, recipient_email=os.getenv("RECEIVER_EMAIL"))
