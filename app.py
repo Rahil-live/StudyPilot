@@ -5,21 +5,14 @@ from planner import allocate_hours, generate_weekly_plan, clean_json_response
 from pdf_export import generate_pdf, load_timetable
 from remainder import send_daily_nudge
 
+import extract
+import planner
+
 st.set_page_config(page_title="Study Pilot", page_icon="📚")
-st.title(("📚 Study Pilot"))
-st.caption("Stop guessing what to study, ask your agent instead")
+st.title("📚 Study Pilot")
+st.caption("Upload a syllabus and get a 7-day plan. This works with no AI token.")
 
-st.header("Your study profile")
-
-uploaded_file = st.file_uploader("Upload your syllabus pdf file", type=["pdf"])
-email = st.text_input("Your email (for daily nudge)")
-hours = st.slider("Daily study hours", min_value=1, max_value=8, value=4)
-
-if st.button("🚀 Generate Plan"):
-    if not uploaded_file:
-        st.error("Please upload a syllabus pdf file")
-        st.stop()
-    
+def _build_plan(uploaded_file, email, hours):
     with st.spinner("Reading your syllabus..."):
         # Save the uploaded file to a temporary file so that pdfplumber can use it
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -62,6 +55,8 @@ if st.button("🚀 Generate Plan"):
         generate_pdf(rows, summary, output_path="timetable.pdf")
 
     st.success("✅ Plan Completed")
+    if planner.plan_source == "local" or extract.syllabus_source == "local":
+        st.info("Built on this machine. An AI token was not required.")
 
     st.header("📋 Your weekly Timetable")
     for day in timetable_data["timetable"]:
@@ -91,3 +86,20 @@ if st.button("🚀 Generate Plan"):
             st.warning(f"Couldn't send the email {e}")
     else:
         st.info("Please add the email to get notification")
+
+
+st.header("Your study profile")
+
+uploaded_file = st.file_uploader("Upload your syllabus pdf file", type=["pdf"])
+email = st.text_input("Your email (for daily nudge)")
+hours = st.slider("Daily study hours", min_value=1, max_value=8, value=4)
+
+if st.button("🚀 Generate Plan"):
+    if not uploaded_file:
+        st.error("Please upload a syllabus pdf file")
+        st.stop()
+
+    try:
+        _build_plan(uploaded_file, email, hours)
+    except Exception as e:
+        st.error(f"Could not build the plan: {e}")

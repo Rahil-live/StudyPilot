@@ -1,11 +1,26 @@
 import json
 import os
-from datetime import date, datetime
-from groq import Groq
+from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
 load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# Set by generate_weekly_plan: "ai" when Groq answered, "local" otherwise.
+plan_source = "local"
+
+
+def _groq_client():
+    key = (os.getenv("GROQ_API_KEY") or "").strip()
+    if not key or Groq is None:
+        return None
+    try:
+        return Groq(api_key=key)
+    except Exception:
+        return None
 
 def load_syllabus(path="syllabus.json"):
     with open(path, "r") as f:
@@ -50,7 +65,7 @@ def allocate_hours(subjects, daily_hours=4):
     
     scored.sort(key=lambda x: x["priority_score"], reverse=True)
 
-    total_score = sum(s["priority_score"] for s in scored)
+    total_score = sum(s["priority_score"] for s in scored) or 1
 
     # Allocate minutes proportionally
     total_daily_minutes = daily_hours * 60
@@ -63,8 +78,66 @@ def allocate_hours(subjects, daily_hours=4):
     return scored
 
 
-def generate_weekly_plan(allocated_subjects, daily_hours=4, days_ahead=7):
+def local_weekly_plan(allocated_subjects, daily_hours=4, days_ahead=7):
+    """Spread chapters across the week. Same JSON shape the AI prompt asked for."""
     today = date.today()
+    items = []
+    for subject in allocated_subjects:
+        chapters = subject.get("chapters") or [subject["subject"]]
+        exam = subject.get("exam_date")
+        if exam in (None, "", "Not specified"):
+            exam = None
+        for chapter in chapters:
+            items.append({
+                "subject": subject["subject"],
+                "chapter": chapter,
+                "exam_date": exam,
+            })
+    if not items:
+        items = [{"subject": "Study", "chapter": "Review your notes", "exam_date": None}]
+
+    buckets = [[] for _ in range(days_ahead)]
+    for index, item in enumerate(items):
+        buckets[index % days_ahead].append(item)
+
+    timetable = []
+    budget = int(daily_hours * 60)
+    for day_index, bucket in enumerate(buckets):
+        revising = not bucket
+        if revising:
+            bucket = [items[day_index % len(items)]]
+        each = max(15, budget // len(bucket))
+        slots = []
+        for item in bucket:
+            slots.append({
+                "subject": item["subject"],
+                "duration_minutes": each,
+                "chapters_to_cover": [item["chapter"]],
+                "exam_date": item["exam_date"],
+                "notes": "Revision" if revising or day_index >= 5 else "",
+            })
+        timetable.append({
+            "day": day_index + 1,
+            "date": (today + timedelta(days=day_index)).isoformat(),
+            "slots": slots,
+            "total_study_minutes": each * len(slots),
+        })
+    return json.dumps({
+        "timetable": timetable,
+        "weekly_summary": (
+            f"Local {days_ahead}-day plan, {daily_hours}h per day. "
+            "No AI token was used."
+        ),
+    })
+
+
+def generate_weekly_plan(allocated_subjects, daily_hours=4, days_ahead=7):
+    global plan_source
+    today = date.today()
+    client = _groq_client()
+    if not client:
+        plan_source = "local"
+        return local_weekly_plan(allocated_subjects, daily_hours, days_ahead)
 
     subjects_summary = ""
 
@@ -116,13 +189,19 @@ def generate_weekly_plan(allocated_subjects, daily_hours=4, days_ahead=7):
             }}
             """
 
-    response = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2
-                )
-    
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        raw = response.choices[0].message.content
+        json.loads(clean_json_response(raw))
+        plan_source = "ai"
+        return raw
+    except Exception:
+        plan_source = "local"
+        return local_weekly_plan(allocated_subjects, daily_hours, days_ahead)
 
 def clean_json_response(raw):
     start = raw.find("{")
